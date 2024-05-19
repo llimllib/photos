@@ -2,22 +2,28 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
+	"crawshaw.io/sqlite"
 	"crawshaw.io/sqlite/sqlitex"
+	"github.com/google/uuid"
 	"github.com/lmittmann/tint"
 	"golang.org/x/crypto/bcrypt"
 )
 
 // TODO: look up proper salt procedures
-var SALT = "0f6f68577436a6b466b36b59504191b6"
+const (
+	SALT   = "0f6f68577436a6b466b36b59504191b6"
+	DBFILE = "photos.db"
+)
 
-// User struct to represent user data
 type User struct {
 	ID       string
 	Username string
@@ -31,22 +37,105 @@ func getUserByUsername(db *sqlitex.Pool, username string, ctx context.Context) (
 	}
 	defer db.Put(conn)
 
-	stmt := conn.Prep("SELECT id, username, password FROM users WHERE username = $user")
-	stmt.SetText("$user", username)
-	if hasRow, err := stmt.Step(); err != nil {
-		slog.Warn("Unable to find user", "username", username)
-		err = fmt.Errorf("unable to find user %s: %w", username, err)
-		return nil, err
-	} else if !hasRow {
+	var user *User
+	fn := func(stmt *sqlite.Stmt) error {
+		user = &User{
+			ID:       stmt.ColumnText(0),
+			Username: stmt.ColumnText(1),
+			Password: []byte(stmt.ColumnText(2)),
+		}
+		return nil
+	}
+	if err := sqlitex.Exec(conn,
+		"SELECT id, username, password FROM users WHERE username = ?;",
+		fn,
+		username,
+	); err != nil {
 		err = fmt.Errorf("unable to find user %s: %w", username, err)
 		return nil, err
 	}
 
-	return &User{
-		ID:       stmt.GetText("id"),
-		Username: stmt.GetText("username"),
-		Password: []byte(stmt.GetText("password")),
+	return user, nil
+}
+
+type Session struct {
+	ID        string
+	data      *SessionData
+	createdAt time.Time
+}
+
+type SessionData struct {
+	Username string `json:"string"`
+}
+
+func NewSession(db *sqlitex.Pool, data *SessionData, ctx context.Context) (*Session, error) {
+	conn := db.Get(ctx)
+	if conn == nil {
+		panic("unable to open db connection")
+	}
+	defer db.Put(conn)
+
+	createdAt := time.Now()
+	id, err := uuid.NewUUID()
+	if err != nil {
+		return nil, err
+	}
+	encData, err := json.Marshal(data)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := sqlitex.Exec(
+		conn,
+		"INSERT INTO sessions (id, data, created_at) VALUES (?, ?, ?);",
+		nil,
+		id, encData, createdAt.Format(time.RFC3339)); err != nil {
+		return nil, err
+	}
+
+	return &Session{
+		ID:        id.String(),
+		data:      data,
+		createdAt: createdAt,
 	}, nil
+}
+
+func lookupSession(db *sqlitex.Pool, id string, ctx context.Context) (*Session, error) {
+	conn := db.Get(ctx)
+	if conn == nil {
+		panic("unable to open db connection")
+	}
+	defer db.Put(conn)
+
+	var session *Session
+	fn := func(stmt *sqlite.Stmt) error {
+		t, err := time.Parse(time.RFC3339, stmt.ColumnText(2))
+		if err != nil {
+			return err
+		}
+
+		var data *SessionData
+		err = json.Unmarshal([]byte(stmt.ColumnText(1)), data)
+		if err != nil {
+			return err
+		}
+
+		session = &Session{
+			ID:        stmt.ColumnText(0),
+			data:      data,
+			createdAt: t,
+		}
+		return nil
+	}
+	if err := sqlitex.Exec(conn,
+		"SELECT id, data, created_at FROM sessions WHERE id = ?;",
+		fn,
+		id,
+	); err != nil {
+		return nil, fmt.Errorf("unable to find session %s: %w", id, err)
+	}
+
+	return session, nil
 }
 
 func NewLoggingMiddleware(logger *slog.Logger) func(http.HandlerFunc) http.HandlerFunc {
@@ -121,12 +210,13 @@ func render(templateFile string, w io.Writer, data any) error {
 }
 
 type server struct {
-	logger *slog.Logger
-	db     *sqlitex.Pool
+	logger     *slog.Logger
+	db         *sqlitex.Pool
+	sessionKey string
 }
 
 func NewServer(logger *slog.Logger) *server {
-	dbpool, err := sqlitex.Open("file:memory:?mode=memory", 0, 10)
+	dbpool, err := sqlitex.Open(DBFILE, 0, 10)
 	if err != nil {
 		logger.Error(err.Error())
 		os.Exit(1)
@@ -156,42 +246,100 @@ func (s *server) loginHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Invalid username or password", http.StatusUnauthorized)
 		}
 
-		// Check if the password is correct
-		if err = bcrypt.CompareHashAndPassword(user.Password, []byte(fmt.Sprintf("%s%s", SALT, password))); err != nil {
+		if err = bcrypt.CompareHashAndPassword(user.Password, []byte(fmt.Sprintf("%s%s", password, SALT))); err != nil {
 			s.logger.Error(err.Error())
 			http.Error(w, "Invalid username or password", http.StatusUnauthorized)
 			return
 		}
 
-		// User is authenticated, set a session cookie or take further actions
-		http.Redirect(w, r, "/", http.StatusFound)
+		var sess *Session
+		if sess, err = NewSession(s.db, &SessionData{username}, r.Context()); err != nil {
+			s.logger.Error(err.Error())
+			http.Error(w, "Invalid username or password", http.StatusUnauthorized)
+			return
+		}
 
+		sessionCookie := &http.Cookie{
+			Name:     "photos-login",
+			Value:    sess.ID,
+			Expires:  time.Now().Add(24 * time.Hour), // Expires in 24 hours
+			HttpOnly: true,                           // Prevent client-side script access
+			Secure:   true,                           // Only send over HTTPS
+		}
+
+		http.SetCookie(w, sessionCookie)
+		http.Redirect(w, r, "/", http.StatusFound)
 	default:
 		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
 	}
 }
 
+type RootPageData struct {
+	Session *Session
+}
+
 func (s *server) root(w http.ResponseWriter, r *http.Request) {
-	if err := render("templates/index.html", w, "Hello, World!"); err != nil {
+	var sess *Session
+	cookie, err := r.Cookie("photos-login")
+	if err == nil {
+		s.logger.Debug("Found cookie", "cookie", cookie)
+		sess, err = lookupSession(s.db, cookie.Value, r.Context())
+		if err != nil {
+			s.logger.Debug("Failed to find session", "id", cookie.Value)
+		}
+	}
+	if err := render("templates/index.html", w, RootPageData{sess}); err != nil {
 		s.logger.Error(err.Error())
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
 
-func main() {
+func initLogger() *slog.Logger {
 	w := os.Stderr
-	logger := slog.New(tint.NewHandler(w, nil))
+	level := new(slog.LevelVar)
 
+	switch getenv("LOG_LEVEL", "Info") {
+	case "Warn":
+		level.Set(slog.LevelWarn)
+	case "Debug":
+		level.Set(slog.LevelDebug)
+	case "Info":
+		level.Set(slog.LevelInfo)
+	default:
+		panic("Invalid log level " + getenv("LOG_LEVEL", "Info"))
+	}
+
+	// If PRETTY_LOGGER is present, create a nice-looking local logger.
+	// Otherwise, log JSON output.
+	if os.Getenv("PRETTY_LOGGER") == "true" {
+		return slog.New(tint.NewHandler(w, &tint.Options{Level: level}))
+	} else {
+		return slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{Level: level}))
+	}
+}
+
+func getenv(key string, deflaut string) string {
+	if val, ok := os.LookupEnv(key); ok {
+		return val
+	}
+	return deflaut
+}
+
+func main() {
+	logger := initLogger()
 	server := NewServer(logger)
 
 	recover := NewPanicMiddleware(logger)
-	logging := NewLoggingMiddleware(logger)
+	log := NewLoggingMiddleware(logger)
 
-	http.Handle("/login", logging(recover(server.loginHandler)))
-	http.Handle("/", logging(recover(server.root)))
+	http.Handle("/login", log(recover(server.loginHandler)))
+	http.Handle("/", log(recover(server.root)))
 
-	logger.Info("Starting server on :8080")
-	if err := http.ListenAndServe(":8080", nil); err != nil {
+	host := getenv("HOST", "localhost")
+	port := getenv("PORT", "8080")
+	addr := fmt.Sprintf("%s:%s", host, port)
+	logger.Info("Starting server on", "host", host, "port", port)
+	if err := http.ListenAndServe(addr, nil); err != nil {
 		logger.Error(err.Error())
 		os.Exit(1)
 	}

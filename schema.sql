@@ -1,0 +1,11 @@
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  username TEXT NOT NULL UNIQUE,
+  password TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT PRIMARY KEY,
+  data JSON NOT NULL,
+  created_at TEXT NOT NULL
+);

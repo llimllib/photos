@@ -1,2 +1,6 @@
 .mise.toml
 photos
+*.db-shm
+*.db-wal
+*.db
+NOTES
