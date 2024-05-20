@@ -6,8 +6,9 @@
 </head>
 
 <body>
+  {{ if not .Session }} <a href="/login">login</a> {{ end }}
   <h1>Hi</h1>
-  {{ if .Session }} {{ .Session.username }} {{ end }}
+  {{ if .Session }} {{ .Session.Data.Username }} {{ end }}
 </body>
 
 </html>

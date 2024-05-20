@@ -11,8 +11,8 @@ import (
 	"os"
 	"time"
 
-	"crawshaw.io/sqlite"
-	"crawshaw.io/sqlite/sqlitex"
+	sqlite "github.com/go-llsqlite/crawshaw"
+	"github.com/go-llsqlite/crawshaw/sqlitex"
 	"github.com/google/uuid"
 	"github.com/lmittmann/tint"
 	"golang.org/x/crypto/bcrypt"
@@ -46,11 +46,11 @@ func getUserByUsername(db *sqlitex.Pool, username string, ctx context.Context) (
 		}
 		return nil
 	}
-	if err := sqlitex.Exec(conn,
-		"SELECT id, username, password FROM users WHERE username = ?;",
-		fn,
-		username,
-	); err != nil {
+	if err := sqlitex.Execute(conn,
+		"SELECT id, username, password FROM users WHERE username = ?;", &sqlitex.ExecOptions{
+			Args:       []any{username},
+			ResultFunc: fn,
+		}); err != nil {
 		err = fmt.Errorf("unable to find user %s: %w", username, err)
 		return nil, err
 	}
@@ -60,8 +60,8 @@ func getUserByUsername(db *sqlitex.Pool, username string, ctx context.Context) (
 
 type Session struct {
 	ID        string
-	data      *SessionData
-	createdAt time.Time
+	Data      *SessionData
+	CreatedAt time.Time
 }
 
 type SessionData struct {
@@ -85,18 +85,18 @@ func NewSession(db *sqlitex.Pool, data *SessionData, ctx context.Context) (*Sess
 		return nil, err
 	}
 
-	if err := sqlitex.Exec(
-		conn,
+	if err := sqlitex.Execute(conn,
 		"INSERT INTO sessions (id, data, created_at) VALUES (?, ?, ?);",
-		nil,
-		id, encData, createdAt.Format(time.RFC3339)); err != nil {
+		&sqlitex.ExecOptions{
+			Args: []any{id, encData, createdAt.Format(time.RFC3339)},
+		}); err != nil {
 		return nil, err
 	}
 
 	return &Session{
 		ID:        id.String(),
-		data:      data,
-		createdAt: createdAt,
+		Data:      data,
+		CreatedAt: createdAt,
 	}, nil
 }
 
@@ -114,24 +114,25 @@ func lookupSession(db *sqlitex.Pool, id string, ctx context.Context) (*Session, 
 			return err
 		}
 
-		var data *SessionData
-		err = json.Unmarshal([]byte(stmt.ColumnText(1)), data)
+		var data SessionData
+		err = json.Unmarshal([]byte(stmt.ColumnText(1)), &data)
 		if err != nil {
 			return err
 		}
 
 		session = &Session{
 			ID:        stmt.ColumnText(0),
-			data:      data,
-			createdAt: t,
+			Data:      &data,
+			CreatedAt: t,
 		}
 		return nil
 	}
-	if err := sqlitex.Exec(conn,
+	if err := sqlitex.Execute(conn,
 		"SELECT id, data, created_at FROM sessions WHERE id = ?;",
-		fn,
-		id,
-	); err != nil {
+		&sqlitex.ExecOptions{
+			ResultFunc: fn,
+			Args:       []any{id},
+		}); err != nil {
 		return nil, fmt.Errorf("unable to find session %s: %w", id, err)
 	}
 
@@ -142,7 +143,9 @@ func NewLoggingMiddleware(logger *slog.Logger) func(http.HandlerFunc) http.Handl
 	return func(next http.HandlerFunc) http.HandlerFunc {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			wrappedWriter := newResponseWriter(w)
+			t1 := time.Now()
 			next.ServeHTTP(wrappedWriter, r)
+			t2 := time.Now()
 
 			statusCode := wrappedWriter.statusCode
 			path := r.URL.Path
@@ -152,12 +155,14 @@ func NewLoggingMiddleware(logger *slog.Logger) func(http.HandlerFunc) http.Handl
 					"request",
 					"status", statusCode,
 					"path", path,
+					"duration", t2.Sub(t1),
 				)
 			} else {
 				logger.ErrorContext(r.Context(),
 					"error",
 					"status", statusCode,
 					"path", path,
+					"duration", t2.Sub(t1),
 				)
 			}
 		})
@@ -216,6 +221,9 @@ type server struct {
 }
 
 func NewServer(logger *slog.Logger) *server {
+	sqlite.Logger = func(code sqlite.ErrorCode, msg []byte) {
+		logger.Debug(string(msg), "code", code, "source", "sqlite")
+	}
 	dbpool, err := sqlitex.Open(DBFILE, 0, 10)
 	if err != nil {
 		logger.Error(err.Error())
@@ -285,7 +293,7 @@ func (s *server) root(w http.ResponseWriter, r *http.Request) {
 		s.logger.Debug("Found cookie", "cookie", cookie)
 		sess, err = lookupSession(s.db, cookie.Value, r.Context())
 		if err != nil {
-			s.logger.Debug("Failed to find session", "id", cookie.Value)
+			s.logger.Debug("Failed to find session", "id", cookie.Value, "err", err)
 		}
 	}
 	if err := render("templates/index.html", w, RootPageData{sess}); err != nil {
