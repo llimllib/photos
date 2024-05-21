@@ -6,8 +6,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"os"
 
-	"crawshaw.io/sqlite/sqlitex"
+	"github.com/go-llsqlite/crawshaw/sqlitex"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -15,10 +16,14 @@ import (
 const (
 	dbFile    = "photos.db"
 	tableName = "users"
-	saltStr   = "0f6f68577436a6b466b36b59504191b6"
 )
 
 func main() {
+	saltStr, ok := os.LookupEnv("SALT")
+	if !ok {
+		panic("SALT env var required")
+	}
+
 	db, err := sqlitex.Open(dbFile, 0, 10)
 	if err != nil {
 		log.Fatalf("Error opening database: %v", err)
@@ -31,16 +36,19 @@ func main() {
 	}
 	defer db.Put(conn)
 
-	passwordBytes := make([]byte, 8)
-	_, err = rand.Read(passwordBytes)
-	if err != nil {
-		log.Fatalf("Error generating random password: %v", err)
+	adminPW, ok := os.LookupEnv("ADMIN_PW")
+	if !ok {
+		passwordBytes := make([]byte, 8)
+		_, err = rand.Read(passwordBytes)
+		if err != nil {
+			log.Fatalf("Error generating random password: %v", err)
+		}
+		adminPW = hex.EncodeToString(passwordBytes)
 	}
-	password := hex.EncodeToString(passwordBytes)
-	fmt.Printf("Password: %s\n", password)
+	fmt.Printf("Password: %s\n", adminPW)
 
 	// Combine the password and salt string, and hash them using bcrypt
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password+saltStr), bcrypt.DefaultCost)
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(adminPW+saltStr), bcrypt.DefaultCost)
 	if err != nil {
 		log.Fatalf("Error hashing password: %v", err)
 	}

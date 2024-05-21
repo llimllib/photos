@@ -9,3 +9,13 @@ CREATE TABLE IF NOT EXISTS sessions (
   data JSON NOT NULL,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS photos (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  caption TEXT,
+	filename TEXT NOT NULL,
+	metadata JSON,
+	created_at TEXT NOT NULL,
+	modified_at TEXT NOT NULL
+);

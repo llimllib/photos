@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Image Upload</title>
+</head>
+
+<body>
+  <h1>Upload Images</h1>
+  <form action="/upload" method="POST" enctype="multipart/form-data">
+    <div>
+      <label for="title">Title:</label>
+      <input type="text" id="title" name="title" required />
+    </div>
+    <div>
+      <label for="caption">Caption:</label>
+      <textarea id="caption" name="caption"></textarea>
+    </div>
+    <div>
+      <label for="images">Images:</label>
+      <input type="file" id="images" name="images" multiple required />
+    </div>
+    <button type="submit">Upload</button>
+  </form>
+</body>
+
+</html>

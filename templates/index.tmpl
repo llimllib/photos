@@ -1,0 +1,17 @@
+<!doctype html>
+<html>
+
+<head>
+  <title>Hello World</title>
+</head>
+
+<body>
+  {{ if not .Session }} <a href="/login">login</a> {{ end }} {{ if .Session }}
+  <h1>welcome {{ .Session.Data.Username }}</h1>
+  {{ end }}
+  {{ range .Photos }}
+      {{ .Filename }}
+  {{ end }}
+</body>
+
+</html>
