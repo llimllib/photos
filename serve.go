@@ -18,9 +18,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// TODO: look up proper salt procedures
 const (
-	SALT   = "0f6f68577436a6b466b36b59504191b6"
 	DBFILE = "photos.db"
 )
 
@@ -41,9 +39,15 @@ type server struct {
 	logger     *slog.Logger
 	db         *sqlitex.Pool
 	sessionKey string
+	salt       string
 }
 
 func NewServer(logger *slog.Logger) *server {
+	salt := getenv("SALT", "")
+	if salt == "" {
+		panic("missing required SALT env var")
+	}
+
 	sqlite.Logger = func(code sqlite.ErrorCode, msg []byte) {
 		logger.Debug(string(msg), "code", code, "source", "sqlite")
 	}
@@ -55,6 +59,7 @@ func NewServer(logger *slog.Logger) *server {
 	return &server{
 		logger: logger,
 		db:     dbpool,
+		salt:   salt,
 	}
 }
 
@@ -146,9 +151,10 @@ func (s *server) loginHandler(w http.ResponseWriter, r *http.Request) {
 		if user, err = data.GetUserByUsername(s.db, username, r.Context()); err != nil {
 			s.logger.Error(err.Error())
 			http.Error(w, "Invalid username or password", http.StatusUnauthorized)
+			return
 		}
 
-		if err = bcrypt.CompareHashAndPassword(user.Password, []byte(fmt.Sprintf("%s%s", password, SALT))); err != nil {
+		if err = bcrypt.CompareHashAndPassword(user.Password, []byte(fmt.Sprintf("%s%s", password, s.salt))); err != nil {
 			s.logger.Error(err.Error())
 			http.Error(w, "Invalid username or password", http.StatusUnauthorized)
 			return
@@ -196,6 +202,7 @@ func (s *server) root(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.logger.Error(err.Error())
 		http.Error(w, "Error getting photos", http.StatusInternalServerError)
+		return
 	}
 
 	if err := render("templates/index.tmpl", w, RootPageData{photos, sess}); err != nil {
@@ -243,10 +250,13 @@ func main() {
 	log := middleware.NewLoggingMiddleware(logger)
 	authRequired := middleware.NewAuthRequiredMiddleware(logger, server.db)
 
+	uploadFS := http.FileServer(http.Dir("uploads"))
+
 	// Authorized routes
 	http.Handle("/upload", log(recover(authRequired(server.upload))))
 
 	// Open routes
+	http.Handle("GET /uploads/", log(recover(http.StripPrefix("/uploads", uploadFS).ServeHTTP)))
 	http.Handle("/login", log(recover(server.loginHandler)))
 	http.Handle("/", log(recover(server.root)))
 

@@ -6,12 +6,19 @@
 </head>
 
 <body>
-  {{ if not .Session }} <a href="/login">login</a> {{ end }} {{ if .Session }}
-  <h1>welcome {{ .Session.Data.Username }}</h1>
-  {{ end }}
-  {{ range .Photos }}
-      {{ .Filename }}
-  {{ end }}
+	<ul>
+		{{ if not .Session }}
+			<li><a href="/login">login</a></li>
+		{{ end }}
+		{{ if .Session }}
+			<li><a href="/upload">upload</a></li>
+	</ul>
+    <h1>welcome {{ .Session.Data.Username }}</h1>
+    {{ end }}
+    {{ range .Photos }}
+        {{ .Filename }}
+		<img src="/uploads/{{ .Filename }}">
+    {{ end }}
 </body>
 
 </html>

@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS photos (
+CREATE TABLE IF NOT EXISTS uploads (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
   caption TEXT,

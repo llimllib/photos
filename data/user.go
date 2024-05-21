@@ -35,9 +35,11 @@ func GetUserByUsername(db *sqlitex.Pool, username string, ctx context.Context) (
 			Args:       []any{username},
 			ResultFunc: fn,
 		}); err != nil {
-		err = fmt.Errorf("unable to find user %s: %w", username, err)
-		return nil, err
+		return nil, fmt.Errorf("unable to find user %s: %w", username, err)
 	}
 
+	if user == nil {
+		return nil, fmt.Errorf("unable to find user %s", username)
+	}
 	return user, nil
 }

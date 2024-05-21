@@ -54,7 +54,7 @@ func NewUpload(
 		`INSERT INTO uploads (id, title, caption, filename, metadata, created_at, modified_at)
 	          VALUES (?, ?, ?, ?, ?, ?, ?);`,
 		&sqlitex.ExecOptions{
-			Args: []any{id, title, caption, filename, encMetadata, createdAt, createdAt},
+			Args: []any{id, title, caption, filename, encMetadata, createdAt.Format(time.RFC3339), createdAt.Format(time.RFC3339)},
 		}); err != nil {
 		return nil, err
 	}
