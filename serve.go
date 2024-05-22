@@ -42,12 +42,7 @@ type server struct {
 	salt       string
 }
 
-func NewServer(logger *slog.Logger) *server {
-	salt := getenv("SALT", "")
-	if salt == "" {
-		panic("missing required SALT env var")
-	}
-
+func NewServer(logger *slog.Logger, salt string) *server {
 	sqlite.Logger = func(code sqlite.ErrorCode, msg []byte) {
 		logger.Debug(string(msg), "code", code, "source", "sqlite")
 	}
@@ -120,7 +115,22 @@ func (s *server) upload(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			data.NewUpload(s.db, title, caption, fileHeader.Filename, data.UploadMetadata{}, r.Context())
+			contentType := fileHeader.Header.Get("Content-Type")
+
+			upload, err := data.NewUpload(s.db,
+				title,
+				caption,
+				fileHeader.Filename,
+				contentType,
+				data.UploadMetadata{},
+				r.Context())
+			if err != nil {
+				s.logger.Error("Unable to save upload", "err", err.Error())
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+
+			go data.ProcessImage(s.db, upload.ID, s.logger)
 			// TODO: kick off a background process to:
 			// - create thumbnails
 			// - process exif data
@@ -215,7 +225,7 @@ func initLogger() *slog.Logger {
 	w := os.Stderr
 	level := new(slog.LevelVar)
 
-	switch getenv("LOG_LEVEL", "Info") {
+	switch getEnv("LOG_LEVEL", "Info") {
 	case "Warn":
 		level.Set(slog.LevelWarn)
 	case "Debug":
@@ -223,7 +233,7 @@ func initLogger() *slog.Logger {
 	case "Info":
 		level.Set(slog.LevelInfo)
 	default:
-		panic("Invalid log level " + getenv("LOG_LEVEL", "Info"))
+		panic("Invalid log level " + getEnv("LOG_LEVEL", "Info"))
 	}
 
 	// If PRETTY_LOGGER is present, create a nice-looking local logger.
@@ -235,16 +245,26 @@ func initLogger() *slog.Logger {
 	}
 }
 
-func getenv(key string, deflaut string) string {
+func getEnv(key string, deflaut string) string {
 	if val, ok := os.LookupEnv(key); ok {
 		return val
 	}
 	return deflaut
 }
 
+func getRequiredEnv(key string) string {
+	if val, ok := os.LookupEnv(key); ok {
+		return val
+	}
+	fmt.Printf("fatal: missing required environment variable %s\n", key)
+	os.Exit(1)
+	return ""
+}
+
 func main() {
+	salt := getRequiredEnv("SALT")
 	logger := initLogger()
-	server := NewServer(logger)
+	server := NewServer(logger, salt)
 
 	recover := middleware.NewPanicMiddleware(logger)
 	log := middleware.NewLoggingMiddleware(logger)
@@ -260,8 +280,8 @@ func main() {
 	http.Handle("/login", log(recover(server.loginHandler)))
 	http.Handle("/", log(recover(server.root)))
 
-	host := getenv("HOST", "localhost")
-	port := getenv("PORT", "8080")
+	host := getEnv("HOST", "localhost")
+	port := getEnv("PORT", "8080")
 	addr := fmt.Sprintf("%s:%s", host, port)
 	logger.Info("Starting server on", "host", host, "port", port)
 	if err := http.ListenAndServe(addr, nil); err != nil {

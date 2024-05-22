@@ -14,8 +14,9 @@ CREATE TABLE IF NOT EXISTS uploads (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
   caption TEXT,
-	filename TEXT NOT NULL,
-	metadata JSON,
-	created_at TEXT NOT NULL,
-	modified_at TEXT NOT NULL
+  filename TEXT NOT NULL,
+  content_type TEXT NOT NULL,
+  metadata JSON,
+  created_at TEXT NOT NULL,
+  modified_at TEXT NOT NULL
 );
