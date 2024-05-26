@@ -6,7 +6,7 @@ photos: $(SRC) photos.db
 # on schema changes, make clean and recreate the db
 # TODO: when I'm reasonably stable, stop clearing the database on every build
 photos.db: schema.sql
-	$MAKE clean
+	$(MAKE) clean
 	sqlite3 photos.db < schema.sql
 	./ops/create_db.sh photos.db
 
